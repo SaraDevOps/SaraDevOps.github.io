@@ -1,0 +1,70 @@
+name: Deploy portfolio to GitHub Pages
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Validate site files
+        run: |
+          set -euo pipefail
+          test -f index.html
+          missing=0
+          for ref in $(grep -oE '(src|href)="[^"#:]+"' index.html | sed -E 's/^(src|href)="//; s/"$//; s/\?.*$//' | sort -u); do
+            if [ ! -f "$ref" ]; then echo "::error::Missing file referenced in index.html: $ref"; missing=1; fi
+          done
+          exit $missing
+
+      - name: List details still to confirm
+        run: |
+          count=$(grep -o 'class="todo[^"]*">[^<]*' index.html | wc -l)
+          if [ "$count" -gt 0 ]; then
+            echo "::warning::$count placeholder(s) are still on the page. Search index.html for class=\"todo\"."
+            grep -o 'class="todo[^"]*">[^<]*' index.html | sed -E 's/.*">//' | while read -r line; do
+              echo "::warning::To confirm: $line"
+            done
+          else
+            echo "No placeholders left."
+          fi
+
+      - name: Assemble site
+        run: |
+          set -euo pipefail
+          mkdir -p _site
+          cp -r index.html assets .nojekyll _site/
+          sed -i "s/__BUILD_SHA__/${GITHUB_SHA}/; s/__BUILD_DATE__/$(date -u +%Y-%m-%d)/; s/?v=dev/?v=${GITHUB_SHA::7}/g" _site/index.html
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
